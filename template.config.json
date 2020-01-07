@@ -1,0 +1,9 @@
+{
+  "db": "./uwatch.bolt.db",
+  "tg": {
+    "api_token": "env:TG_API_TOKEN",
+    "allowed_users": {
+      "shebg": {}
+    }
+  }
+}
