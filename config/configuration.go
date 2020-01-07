@@ -12,8 +12,9 @@ type Config struct {
 	DB       string `json:"db"`
 	LogLevel string `json:"log_level"`
 
-	AuthLog string    `json:"auth_log"`
-	TG      *TGConfig `json:"tg,omitempty"`
+	AuthLog     string    `json:"auth_log"`
+	IgnoreFails bool      `json:"ignore_fails"`
+	TG          *TGConfig `json:"tg,omitempty"`
 }
 type TGConfig struct {
 	APIToken     noble.Secret        `json:"api_token"`

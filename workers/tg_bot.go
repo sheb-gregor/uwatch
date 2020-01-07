@@ -78,9 +78,10 @@ func (tg *TgBot) Run(ctx uwe.Context) error {
 	for {
 		select {
 		case msg := <-tg.hubBus.MessageBus():
-			if msg.Sender != WAuthSaver {
+			if msg.Sender != WWatcher {
 				continue
 			}
+
 			tg.logger.WithField("msg_data", fmt.Sprintf("%+v", msg.Data)).
 				Debug("got new msg")
 
@@ -91,18 +92,23 @@ func (tg *TgBot) Run(ctx uwe.Context) error {
 				continue
 			}
 
+			if session.Status != db.AuthAccepted {
+				continue
+			}
+
 			rawSession, err := json.MarshalIndent(session, "", "  ")
 			if err != nil {
 				tg.logger.WithError(err).Error("unable to MarshalIndent session")
 				continue
 			}
+
 			for user, info := range tg.users {
 				if info.Muted {
 					continue
 				}
 
 				text := fmt.Sprintf(
-					"Hi, %s!\n\n We got new auth attempt at server!\n\n Here details: ``` %s```",
+					"Hi, %s!\n\nWe got new accepted auth at server!\n\nHere details:\n\n```\n%s\n```\n\n",
 					user,
 					string(rawSession),
 				)

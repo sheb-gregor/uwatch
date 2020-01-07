@@ -25,6 +25,7 @@ func ParseLine(logLine string) (*db.AuthInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	timeStamp = timeStamp.AddDate(time.Now().Year(), 0, 0)
 
 	authInfo := &db.AuthInfo{
 		Status: db.AuthStatus(matches[4]),

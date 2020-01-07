@@ -25,7 +25,6 @@ func main() {
 	logger.SetLevel(logLevel)
 	entry := logger.WithField("app", "uwatch")
 
-	hub := workers.NewEventHub(10)
 	storage, err := db.NewStorage(cfg.DB)
 	if err != nil {
 		entry.WithError(err).Fatal("unable to init storage")
@@ -35,15 +34,16 @@ func main() {
 	chief := uwe.NewChief()
 	chief.UseDefaultRecover()
 
-	chief.AddWorker(workers.WLogWatcher,
-		workers.NewWatcher(cfg, hub.AddWorker(workers.WLogWatcher), entry))
+	hub := workers.NewEventHub(10)
 
-	chief.AddWorker(workers.WAuthSaver,
-		workers.NewAuthSaver(storage, hub.AddWorker(workers.WAuthSaver), entry))
+	watcherBus := hub.AddWorker(workers.WWatcher)
+	chief.AddWorker(workers.WWatcher,
+		workers.NewWatcher(cfg, storage, watcherBus, entry))
 
 	if cfg.TG != nil {
+		botBus := hub.AddWorker(workers.WTGBot)
 		chief.AddWorker(workers.WTGBot,
-			workers.NewTgBot(*cfg.TG, storage, hub.AddWorker(workers.WTGBot), entry))
+			workers.NewTgBot(*cfg.TG, storage, botBus, entry))
 	}
 
 	chief.AddWorker(workers.WHub, hub)

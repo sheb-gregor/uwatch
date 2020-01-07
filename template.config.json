@@ -1,9 +1,12 @@
 {
-  "db": "./uwatch.bolt.db",
+  "auth_log": "/var/log/auth.log",
+  "log_level": "debug",
+  "db": "./uwatch_db",
+  "ignore_fails": true,
   "tg": {
     "api_token": "env:TG_API_TOKEN",
     "allowed_users": {
       "shebg": {}
     }
-  }
+  },
 }

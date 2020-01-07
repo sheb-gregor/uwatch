@@ -59,12 +59,10 @@ func (s *Session) Update(info AuthInfo) {
 		s.AuthMethods[info.AuthMethod] += 1
 
 		if s.FirstLogInTime == nil {
-			s.FirstLogInTime = &time.Time{}
-			*s.FirstLogInTime = info.Date
+			s.FirstLogInTime = &info.Date
 		}
 
-		s.LastLogInTime = &time.Time{}
-		*s.LastLogInTime = info.Date
+		s.LastLogInTime = &info.Date
 	case AuthDisconnected:
 		if s.ConnsCount > 0 {
 			s.ConnsCount -= 1
@@ -73,13 +71,13 @@ func (s *Session) Update(info AuthInfo) {
 			s.AuthMethods[info.AuthMethod] -= 1
 		}
 
-		s.LastLogOutTime = &time.Time{}
-		*s.LastLogOutTime = info.Date
+		s.LastLogOutTime = &info.Date
 	case AuthFailed:
-		s.FailsCount -= 1
-		s.LastAttemptTime = &time.Time{}
-		*s.LastAttemptTime = info.Date
+		s.FailsCount += 1
+		s.LastAttemptTime = &info.Date
 	}
+
+	s.Status = info.Status
 }
 
 type authStorage struct {
