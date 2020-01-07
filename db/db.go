@@ -1,95 +1,74 @@
 package db
 
 import (
-	"encoding/json"
+	"os"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
 
-// Data Storage Schema:
+type StorageI interface {
+	Auth() AuthStorage
+	TG() TGStorage
+	Slack() SlackStorage
+}
+
+// Auth Storage Schema:
 // Bucket<username> -*> Key<ip> -> Value<Session>
+type AuthStorage interface {
+	UpsetAuthEvent(authInfo AuthInfo) (Session, error)
+	GetUserSessions(username string) ([]Session, error)
+}
+
+type TGStorage interface {
+	AddUser(username string, chatID int64) error
+	Mute(username string, chatID int64) error
+	GetUsers() (map[string]TGChatInfo, error)
+	GetUser(username string) (TGChatInfo, error)
+}
+
+type SlackStorage interface {
+}
 
 type Storage struct {
-	db *bolt.DB
+	authDB *bolt.DB
+	tgDB   *bolt.DB
 }
 
-func NewStorage(dbPath string) (*Storage, error) {
-	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
-	if err != nil {
-		return nil, err
-	}
-
-	return &Storage{db: db}, nil
-}
-
-func (st *Storage) UpsetAuthEvent(authInfo AuthInfo) error {
-	tx, err := st.db.Begin(true)
-	if err != nil {
-		return err
-	}
-
-	userBucket, err := tx.CreateBucketIfNotExists([]byte(authInfo.Username))
-	if err != nil {
-		return err
-	}
-
-	sessionID, err := userBucket.NextSequence()
-	if err != nil {
-		return err
-	}
-
-	var session Session
-	rawSession := userBucket.Get([]byte(authInfo.RemoteAddr))
-	if rawSession == nil {
-		session = NewSession(sessionID, authInfo)
-	} else {
-		err = json.Unmarshal(rawSession, &session)
-		if err != nil {
-			return err
-		}
-
-		session.Update(authInfo)
-	}
-
-	rawSession, err = json.Marshal(session)
-	if err != nil {
-		return err
-	}
-
-	if err := userBucket.Put([]byte(authInfo.RemoteAddr), rawSession); err != nil {
-		return err
-	}
-
-	return tx.Commit()
-}
-
-func (st *Storage) GetUserSessions(username string) ([]Session, error) {
-	tx, err := st.db.Begin(false)
-	if err != nil {
-		return nil, err
-	}
-
-	userBucket := tx.Bucket([]byte(username))
-	if userBucket != nil {
-		return nil, nil
-	}
-	var sessions []Session
-	cursor := userBucket.Cursor()
-
-	for {
-		_, rawSession := cursor.Next()
-		if rawSession == nil {
-			break
-		}
-
-		var session Session
-		err = json.Unmarshal(rawSession, &session)
+func NewStorage(dbPath string) (StorageI, error) {
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		err = os.Mkdir(dbPath, 0755)
 		if err != nil {
 			return nil, err
 		}
-		sessions = append(sessions, session)
 	}
 
-	return sessions, nil
+	authDB, err := bolt.Open(dbPath+"/auth.db", 0644, &bolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+
+	tgDB, err := bolt.Open(dbPath+"/tg.db", 0644, &bolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+
+	return &Storage{authDB: authDB, tgDB: tgDB}, nil
+}
+
+func (st *Storage) Auth() AuthStorage {
+	return &authStorage{
+		db: st.authDB,
+	}
+}
+
+func (st *Storage) TG() TGStorage {
+	return &tgStorage{
+		db: st.tgDB,
+	}
+}
+
+func (st *Storage) Slack() SlackStorage {
+	// todo:
+	return nil
 }

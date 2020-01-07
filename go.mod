@@ -7,6 +7,7 @@ require (
 	github.com/hpcloud/tail v1.0.0
 	github.com/lancer-kit/noble v1.0.8
 	github.com/lancer-kit/uwe/v2 v2.0.6
+	github.com/sirupsen/logrus v1.4.2
 	github.com/technoweenie/multipartstreamer v1.0.1 // indirect
 	go.etcd.io/bbolt v1.3.3
 	golang.org/x/sys v0.0.0-20200106162015-b016eb3dc98e // indirect

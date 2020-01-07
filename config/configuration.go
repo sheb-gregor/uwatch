@@ -9,8 +9,10 @@ import (
 )
 
 type Config struct {
-	DB      string    `json:"db"`
-	Logfile string    `json:"logfile"`
+	DB       string `json:"db"`
+	LogLevel string `json:"log_level"`
+
+	AuthLog string    `json:"auth_log"`
 	TG      *TGConfig `json:"tg,omitempty"`
 }
 type TGConfig struct {
@@ -34,8 +36,8 @@ func GetConfig(configPath string) (config Config) {
 		log.Fatal("Unable to read config:", err)
 		return
 	}
-	if config.Logfile == "" {
-		config.Logfile = pathToLog
+	if config.AuthLog == "" {
+		config.AuthLog = pathToLog
 	}
 
 	if config.TG != nil {

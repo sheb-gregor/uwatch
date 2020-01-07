@@ -1,0 +1,19 @@
+[Unit]
+Description=UWatch
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+TimeoutStartSec=1s
+RestartSec=1s
+Restart=always
+Type=simple
+EnvironmentFile=/etc/uwatch/.env
+ExecStart=/usr/bin/uwatch -config /etc/uwatch/config.json
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=uwatch
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
