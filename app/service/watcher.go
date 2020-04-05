@@ -1,4 +1,4 @@
-package workers
+package service
 
 import (
 	"github.com/hpcloud/tail"
@@ -6,6 +6,7 @@ import (
 	"github.com/sheb-gregor/uwatch/config"
 	"github.com/sheb-gregor/uwatch/db"
 	"github.com/sheb-gregor/uwatch/logparser"
+	"github.com/sheb-gregor/uwatch/models"
 	"github.com/sirupsen/logrus"
 )
 
@@ -16,14 +17,14 @@ type Watcher struct {
 	logger  *logrus.Entry
 }
 
-func NewWatcher(config config.Config, storage db.StorageI, hubBus EventBus, logger *logrus.Entry) *Watcher {
+func NewWatcher(cfg config.Config, storage db.StorageI, hubBus EventBus, logger *logrus.Entry) *Watcher {
 	return &Watcher{
-		config:  config,
+		config:  cfg,
 		storage: storage,
 		hubBus:  hubBus,
 		logger: logger.
 			WithField("appLayer", "workers").
-			WithField("worker", WWatcher)}
+			WithField("worker", config.WWatcher)}
 }
 
 func (w *Watcher) Init() error {
@@ -55,17 +56,17 @@ func (w *Watcher) Run(ctx uwe.Context) error {
 				continue
 			}
 
-			if authInfo.Status == db.AuthFailed && w.config.IgnoreFails {
+			if authInfo.Status == models.AuthFailed && w.config.IgnoreFails {
 				continue
 			}
 
-			session, err := w.storage.Auth().UpsetAuthEvent(*authInfo)
+			session, err := w.storage.Auth().SetAuthEvent(*authInfo)
 			if err != nil {
-				w.logger.WithError(err).Error("UpsetAuthEvent failed")
+				w.logger.WithError(err).Error("SetAuthEvent failed")
 				continue
 			}
 
-			_ = w.hubBus.SendMessage(WTGBot, session)
+			_ = w.hubBus.SendMessage(config.WTGBot, session)
 			w.logger.Debug("broadcast session to bots")
 		case <-ctx.Done():
 			w.logger.Info("finish event loop")

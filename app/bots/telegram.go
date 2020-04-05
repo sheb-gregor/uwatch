@@ -1,37 +1,44 @@
-package workers
+package bots
 
 import (
-	"encoding/json"
 	"fmt"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/lancer-kit/uwe/v2"
+	"github.com/sheb-gregor/uwatch/app/service"
 	"github.com/sheb-gregor/uwatch/config"
 	"github.com/sheb-gregor/uwatch/db"
+	"github.com/sheb-gregor/uwatch/models"
 	"github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
 )
 
 type TgBot struct {
-	config  config.TGConfig
+	logger *logrus.Entry
+	config config.TGConfig
+	server string
+
 	bot     *tgbotapi.BotAPI
-	hubBus  EventBus
+	hubBus  service.EventBus
 	storage db.StorageI
-	logger  *logrus.Entry
 
 	allowedUsers map[string]struct{}
 	users        map[string]db.TGChatInfo
 }
 
-func NewTgBot(config config.TGConfig, storage db.StorageI, hubBus EventBus, logger *logrus.Entry) *TgBot {
+func NewTgBot(host string, cfg config.TGConfig, storage db.StorageI, hubBus service.EventBus, logger *logrus.Entry) *TgBot {
 	return &TgBot{
-		config:       config,
+
 		storage:      storage,
 		hubBus:       hubBus,
-		allowedUsers: config.AllowedUsers,
+		allowedUsers: cfg.AllowedUsers,
 		users:        map[string]db.TGChatInfo{},
+
+		config: cfg,
+		server: host,
 		logger: logger.
-			WithField("appLayer", "workers").
-			WithField("worker", WTGBot),
+			WithField("app_layer", "bots").
+			WithField("worker", config.WTGBot),
 	}
 }
 
@@ -78,25 +85,25 @@ func (tg *TgBot) Run(ctx uwe.Context) error {
 	for {
 		select {
 		case msg := <-tg.hubBus.MessageBus():
-			if msg.Sender != WWatcher {
+			if msg.Sender != config.WWatcher {
 				continue
 			}
 
 			tg.logger.WithField("msg_data", fmt.Sprintf("%+v", msg.Data)).
 				Debug("got new msg")
 
-			session, ok := msg.Data.(db.Session)
+			session, ok := msg.Data.(models.Session)
 			if !ok {
 				tg.logger.WithField("msg_data_type", fmt.Sprintf("%T", msg.Data)).
 					Debug("incoming msg not a db.Session")
 				continue
 			}
 
-			if session.Status != db.AuthAccepted {
+			if session.Status != models.AuthAccepted {
 				continue
 			}
 
-			rawSession, err := json.MarshalIndent(session, "", "  ")
+			rawSession, err := yaml.Marshal(session)
 			if err != nil {
 				tg.logger.WithError(err).Error("unable to MarshalIndent session")
 				continue
@@ -108,11 +115,16 @@ func (tg *TgBot) Run(ctx uwe.Context) error {
 				}
 
 				text := fmt.Sprintf(
-					"Hi, %s!\n\nWe got new accepted auth at server!\n\nHere details:\n\n```\n%s\n```\n\n",
+					"Hi, %s!\n\nWe got new accepted auth at [%s] host.\n\nHere details:\n\n```\n%s\n```\n\n",
 					user,
+					tg.server,
 					string(rawSession),
 				)
+
 				msg := tgbotapi.NewMessage(info.ChatID, text)
+				msg.ParseMode = "markdown"
+				msg.DisableWebPagePreview = true
+
 				if _, err := tg.bot.Send(msg); err != nil {
 					tg.logger.
 						WithError(err).
@@ -174,8 +186,9 @@ func (tg *TgBot) verifyAuth(update tgbotapi.Update) bool {
 }
 
 func (tg *TgBot) processUpdate(update tgbotapi.Update) {
-
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+	msg.ParseMode = "markdown"
+
 	logger := tg.logger.
 		WithField("command", update.Message.Command()).
 		WithField("user", update.Message.From.UserName)
@@ -189,7 +202,7 @@ func (tg *TgBot) processUpdate(update tgbotapi.Update) {
 			tg.allowedUsers[tgUser] = struct{}{}
 			msg.Text = fmt.Sprintf("User @%s added to whitelist.\n Wait for messages from them.", tgUser)
 		} else {
-			msg.Text = "To add someone to whitelist pass his telegram <b>username</b>."
+			msg.Text = "To add someone to whitelist pass his telegram *username*."
 		}
 
 	case "/status":

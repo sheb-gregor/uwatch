@@ -6,12 +6,19 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+const bucketTGWhitelist = "tg_whitelist"
+
 type TGChatInfo struct {
 	ChatID int64
 	Muted  bool
 }
 
-const bucketTGWhitelist = "tg_whitelist"
+type TGStorage interface {
+	AddUser(username string, chatID int64) error
+	GetUser(username string) (TGChatInfo, error)
+	Mute(username string, chatID int64) error
+	GetUsers() (map[string]TGChatInfo, error)
+}
 
 type tgStorage struct {
 	db *bolt.DB
@@ -83,7 +90,7 @@ func (st *tgStorage) Mute(username string, chatID int64) (err error) {
 }
 
 func (st *tgStorage) GetUsers() (users map[string]TGChatInfo, err error) {
-	users = map[string]TGChatInfo{}
+
 	tx, err := st.db.Begin(true)
 	if err != nil {
 		return nil, err
@@ -100,23 +107,20 @@ func (st *tgStorage) GetUsers() (users map[string]TGChatInfo, err error) {
 	if err != nil {
 		return
 	}
-	if bucket != nil {
+	if bucket == nil {
 		return
 	}
 
+	users = map[string]TGChatInfo{}
 	cursor := bucket.Cursor()
-	for {
-		user, value := cursor.Next()
-		if value == nil {
-			break
-		}
+	for user, value := cursor.First(); user != nil; user, value = cursor.Next() {
 		info := TGChatInfo{}
 		err = json.Unmarshal(value, &info)
 
 		users[string(user)] = info
-	}
 
-	return
+	}
+	return users, nil
 }
 
 func (st *tgStorage) GetUser(username string) (info TGChatInfo, err error) {
@@ -133,7 +137,7 @@ func (st *tgStorage) GetUser(username string) (info TGChatInfo, err error) {
 	}()
 
 	bucket := tx.Bucket([]byte(bucketTGWhitelist))
-	if bucket != nil {
+	if bucket == nil {
 		return
 	}
 

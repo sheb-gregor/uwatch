@@ -2,89 +2,40 @@ package db
 
 import (
 	"encoding/json"
-	"time"
 
+	"github.com/sheb-gregor/uwatch/models"
 	bolt "go.etcd.io/bbolt"
 )
 
-type AuthStatus string
-
 const (
-	AuthAccepted     AuthStatus = "Accepted"
-	AuthDisconnected AuthStatus = "Disconnected"
-	AuthFailed       AuthStatus = "Failed"
+	bucketAuthData  = "auth_data"
+	bucketAuthStats = "stats"
 )
 
-type AuthInfo struct {
-	Status     AuthStatus `json:"status"`
-	Username   string     `json:"username"`
-	AuthMethod string     `json:"auth_method,omitempty"`
-	RemoteAddr string     `json:"remote_addr"`
-	Date       time.Time  `json:"date"`
-}
-
-type Session struct {
-	ID          uint64           `json:"session_id"`
-	Status      AuthStatus       `json:"status"`
-	Username    string           `json:"username"`
-	AuthMethods map[string]int32 `json:"auth_methods,omitempty"`
-	RemoteAddr  string           `json:"remote_addr"`
-
-	ConnsCount     int32      `json:"conns_count"`
-	FirstLogInTime *time.Time `json:"login_time,omitempty"`
-	LastLogInTime  *time.Time `json:"login_time,omitempty"`
-	LastLogOutTime *time.Time `json:"logout_time,omitempty"`
-
-	FailsCount      int32      `json:"fails_count,omitempty"`
-	LastAttemptTime *time.Time `json:"last_attempt_time,omitempty"`
-}
-
-func NewSession(sessionID uint64, info AuthInfo) Session {
-	s := Session{
-		ID:          sessionID,
-		Status:      info.Status,
-		Username:    info.Username,
-		AuthMethods: map[string]int32{},
-		RemoteAddr:  info.RemoteAddr}
-
-	s.Update(info)
-
-	return s
-}
-
-func (s *Session) Update(info AuthInfo) {
-	switch info.Status {
-	case AuthAccepted:
-		s.ConnsCount = s.ConnsCount + 1
-		s.AuthMethods[info.AuthMethod] += 1
-
-		if s.FirstLogInTime == nil {
-			s.FirstLogInTime = &info.Date
-		}
-
-		s.LastLogInTime = &info.Date
-	case AuthDisconnected:
-		if s.ConnsCount > 0 {
-			s.ConnsCount -= 1
-		}
-		if s.AuthMethods[info.AuthMethod] > 0 {
-			s.AuthMethods[info.AuthMethod] -= 1
-		}
-
-		s.LastLogOutTime = &info.Date
-	case AuthFailed:
-		s.FailsCount += 1
-		s.LastAttemptTime = &info.Date
-	}
-
-	s.Status = info.Status
+// Auth Storage Schema:
+// Bucket<username> -*> Key<ip> -> Value<Session>
+type AuthStorage interface {
+	GetStats() (models.Stats, error)
+	UpdateStats(authInfo models.Stats) error
+	SetAuthEvent(session models.AuthInfo) error
+	SetSession(session models.Session) error
+	GetSessions() (map[string]map[string]models.Session, error)
+	GetUserSessions(username string) (map[string]models.Session, error)
 }
 
 type authStorage struct {
 	db *bolt.DB
 }
 
-func (st *authStorage) UpsetAuthEvent(authInfo AuthInfo) (session Session, err error) {
+func (st *authStorage) GetStats() (models.Stats, error) {
+	panic("implement me")
+}
+
+func (st *authStorage) UpdateStats(authInfo models.Stats) error {
+	panic("implement me")
+}
+
+func (st *authStorage) SetAuthEvent(authInfo models.AuthInfo) (err error) {
 	tx, err := st.db.Begin(true)
 	if err != nil {
 		return
@@ -107,9 +58,11 @@ func (st *authStorage) UpsetAuthEvent(authInfo AuthInfo) (session Session, err e
 		return
 	}
 
+	var session models.Session
+
 	rawSession := userBucket.Get([]byte(authInfo.RemoteAddr))
 	if rawSession == nil {
-		session = NewSession(sessionID, authInfo)
+		session = models.NewSession(sessionID, authInfo)
 	} else {
 		err = json.Unmarshal(rawSession, &session)
 		if err != nil {
@@ -131,8 +84,8 @@ func (st *authStorage) UpsetAuthEvent(authInfo AuthInfo) (session Session, err e
 	return
 }
 
-func (st *authStorage) GetUserSessions(username string) (sessions []Session, err error) {
-	tx, err := st.db.Begin(false)
+func (st *authStorage) SetSession(session models.Session) (err error) {
+	tx, err := st.db.Begin(true)
 	if err != nil {
 		return
 	}
@@ -144,25 +97,103 @@ func (st *authStorage) GetUserSessions(username string) (sessions []Session, err
 		}
 	}()
 
-	userBucket := tx.Bucket([]byte(username))
-	if userBucket != nil {
+	// userBucket, err := tx.CreateBucketIfNotExists([]byte(authInfo.Username))
+	// if err != nil {
+	// 	return
+	// }
+	//
+	// sessionID, err := userBucket.NextSequence()
+	// if err != nil {
+	// 	return
+	// }
+	//
+	// rawSession := userBucket.Get([]byte(authInfo.RemoteAddr))
+	// if rawSession == nil {
+	// 	session = models.NewSession(sessionID, authInfo)
+	// } else {
+	// 	err = json.Unmarshal(rawSession, &session)
+	// 	if err != nil {
+	// 		return
+	// 	}
+	//
+	// 	session.Update(authInfo)
+	// }
+	//
+	// rawSession, err = json.Marshal(session)
+	// if err != nil {
+	// 	return
+	// }
+	//
+	// if err = userBucket.Put([]byte(authInfo.RemoteAddr), rawSession); err != nil {
+	// 	return
+	// }
+
+	return
+}
+
+func (st *authStorage) GetSessions() (sessions map[string]map[string]models.Session, err error) {
+	tx, err := st.db.Begin(true)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if err != nil {
+			err = tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+
+	authDataBucket := tx.Bucket([]byte(bucketAuthData))
+	if authDataBucket == nil {
 		return
 	}
 
-	cursor := userBucket.Cursor()
+	// authDataBucket.Bucket()
+	//
+	// sessions = map[string]models.Session{}
+	// cursor := authDataBucket.Cursor()
+	// for remote, value := cursor.First(); remote != nil; remote, value = cursor.Next() {
+	// 	var session models.Session
+	// 	err = json.Unmarshal(value, &session)
+	// 	if err != nil {
+	// 		return
+	// 	}
+	//
+	// 	sessions[string(remote)] = session
+	// }
 
-	for {
-		_, rawSession := cursor.Next()
-		if rawSession == nil {
-			break
+	return
+}
+
+func (st *authStorage) GetUserSessions(username string) (sessions map[string]models.Session, err error) {
+	tx, err := st.db.Begin(true)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if err != nil {
+			err = tx.Rollback()
+		} else {
+			err = tx.Commit()
 		}
+	}()
 
-		var session Session
-		err = json.Unmarshal(rawSession, &session)
+	bucket := tx.Bucket([]byte(username))
+	if bucket == nil {
+		return
+	}
+
+	sessions = map[string]models.Session{}
+	cursor := bucket.Cursor()
+	for remote, value := cursor.First(); remote != nil; remote, value = cursor.Next() {
+		var session models.Session
+		err = json.Unmarshal(value, &session)
 		if err != nil {
 			return
 		}
-		sessions = append(sessions, session)
+
+		sessions[string(remote)] = session
 	}
 
 	return
