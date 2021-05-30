@@ -12,7 +12,7 @@ import (
 func Run(cfg config.Config) {
 	entry := cfg.Logger()
 
-	storage, err := db.NewStorage(cfg.GetPath("db"))
+	keeper, err := db.NewStorekeeper(cfg.GetPath("db"))
 	if err != nil {
 		entry.WithError(err).Fatal("unable to init storage")
 		return
@@ -25,12 +25,12 @@ func Run(cfg config.Config) {
 
 	watcherBus := hub.AddWorker(config.WWatcher)
 	chief.AddWorker(config.WWatcher,
-		service.NewWatcher(cfg, storage, watcherBus, entry))
+		service.NewWatcher(cfg, keeper, watcherBus, entry))
 
 	if cfg.TG != nil {
 		botBus := hub.AddWorker(config.WTGBot)
 		chief.AddWorker(config.WTGBot,
-			bots.NewTgBot(cfg.Server, *cfg.TG, storage, botBus, entry))
+			bots.NewTgBot(cfg.Server, *cfg.TG, keeper, botBus, entry))
 	}
 
 	chief.AddWorker(config.WHub, hub)

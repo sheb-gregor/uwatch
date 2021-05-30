@@ -21,12 +21,12 @@ func TestNewSession(t *testing.T) {
 			Date:       time.Now(),
 		}
 
-		session := NewSession(sessionBob, authInfo)
+		session := NewSession(authInfo)
 
 		So(session.Status, ShouldEqual, authInfo.Status)
 		So(session.Username, ShouldEqual, authInfo.Username)
 		So(session.RemoteAddr, ShouldEqual, authInfo.RemoteAddr)
-		So(len(session.AuthMethods), ShouldEqual, 1)
+		// So(len(session.Status), ShouldEqual, 1)
 
 		Convey("Auth Storage allows to", func() {
 

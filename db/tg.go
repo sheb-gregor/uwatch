@@ -14,9 +14,8 @@ type TGChatInfo struct {
 }
 
 type TGStorage interface {
-	AddUser(username string, chatID int64) error
+	AddUser(username string, chatID int64, mute bool) error
 	GetUser(username string) (TGChatInfo, error)
-	Mute(username string, chatID int64) error
 	GetUsers() (map[string]TGChatInfo, error)
 }
 
@@ -24,125 +23,59 @@ type tgStorage struct {
 	db *bolt.DB
 }
 
-func (st *tgStorage) AddUser(username string, chatID int64) (err error) {
-	tx, err := st.db.Begin(true)
-	if err != nil {
-		return
-	}
-
-	defer func() {
-		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
+func (st *tgStorage) AddUser(username string, chatID int64, mute bool) (err error) {
+	return st.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(bucketTGWhitelist))
+		if bucket == nil {
+			return nil
 		}
-	}()
 
-	userBucket, err := tx.CreateBucketIfNotExists([]byte(bucketTGWhitelist))
-	if err != nil {
-		return
-	}
+		info := TGChatInfo{ChatID: chatID, Muted: mute}
+		value, err := json.Marshal(info)
+		if err != nil {
+			return err
+		}
 
-	info := TGChatInfo{ChatID: chatID, Muted: false}
-	value, err := json.Marshal(info)
-	if err != nil {
-		return
-	}
-
-	err = userBucket.Put([]byte(username), value)
-	if err != nil {
-		return
-	}
-
-	return
+		return bucket.Put([]byte(username), value)
+	})
 }
 
-func (st *tgStorage) Mute(username string, chatID int64) (err error) {
-	tx, err := st.db.Begin(true)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
+func (st *tgStorage) GetUser(username string) (TGChatInfo, error) {
+	var info TGChatInfo
+	err := st.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketTGWhitelist))
+		if bucket == nil {
+			return nil
 		}
-	}()
 
-	userBucket, err := tx.CreateBucketIfNotExists([]byte(bucketTGWhitelist))
-	if err != nil {
-		return
-	}
+		val := bucket.Get([]byte(username))
+		return json.Unmarshal(val, &info)
+	})
 
-	info := TGChatInfo{ChatID: chatID, Muted: true}
-	value, err := json.Marshal(info)
-	if err != nil {
-		return
-	}
-
-	err = userBucket.Put([]byte(username), value)
-	if err != nil {
-		return
-	}
-
-	return
+	return info, err
 }
 
-func (st *tgStorage) GetUsers() (users map[string]TGChatInfo, err error) {
+func (st *tgStorage) GetUsers() (map[string]TGChatInfo, error) {
+	var users = map[string]TGChatInfo{}
+	err := st.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketTGWhitelist))
 
-	tx, err := st.db.Begin(true)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
+		if bucket == nil {
+			return nil
 		}
-	}()
 
-	bucket, err := tx.CreateBucketIfNotExists([]byte(bucketTGWhitelist))
-	if err != nil {
-		return
-	}
-	if bucket == nil {
-		return
-	}
+		cursor := bucket.Cursor()
+		for user, value := cursor.First(); user != nil; user, value = cursor.Next() {
+			info := TGChatInfo{}
+			err := json.Unmarshal(value, &info)
+			if err != nil {
+				return err
+			}
 
-	users = map[string]TGChatInfo{}
-	cursor := bucket.Cursor()
-	for user, value := cursor.First(); user != nil; user, value = cursor.Next() {
-		info := TGChatInfo{}
-		err = json.Unmarshal(value, &info)
-
-		users[string(user)] = info
-
-	}
-	return users, nil
-}
-
-func (st *tgStorage) GetUser(username string) (info TGChatInfo, err error) {
-	tx, err := st.db.Begin(true)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
+			users[string(user)] = info
 		}
-	}()
+		return nil
+	})
 
-	bucket := tx.Bucket([]byte(bucketTGWhitelist))
-	if bucket == nil {
-		return
-	}
-
-	val := bucket.Get([]byte(username))
-	err = json.Unmarshal(val, &info)
-
-	return
+	return users, err
 }

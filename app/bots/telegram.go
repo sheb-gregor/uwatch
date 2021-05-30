@@ -2,6 +2,7 @@ package bots
 
 import (
 	"fmt"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/lancer-kit/uwe/v2"
@@ -18,18 +19,17 @@ type TgBot struct {
 	config config.TGConfig
 	server string
 
-	bot     *tgbotapi.BotAPI
-	hubBus  service.EventBus
-	storage db.StorageI
+	bot    *tgbotapi.BotAPI
+	hubBus service.EventBus
+	keeper db.Storekeeper
 
 	allowedUsers map[string]struct{}
 	users        map[string]db.TGChatInfo
 }
 
-func NewTgBot(host string, cfg config.TGConfig, storage db.StorageI, hubBus service.EventBus, logger *logrus.Entry) *TgBot {
+func NewTgBot(host string, cfg config.TGConfig, keeper db.Storekeeper, hubBus service.EventBus, logger *logrus.Entry) *TgBot {
 	return &TgBot{
-
-		storage:      storage,
+		keeper:       keeper,
 		hubBus:       hubBus,
 		allowedUsers: cfg.AllowedUsers,
 		users:        map[string]db.TGChatInfo{},
@@ -52,11 +52,10 @@ func (tg *TgBot) Init() error {
 	bot.Debug = false
 	tg.bot = bot
 
-	tg.logger.
-		WithField("username", tg.bot.Self.UserName).
+	tg.logger.WithField("username", tg.bot.Self.UserName).
 		Info("authorized on account")
 
-	users, err := tg.storage.TG().GetUsers()
+	users, err := tg.keeper.DB.TG().GetUsers()
 	if err != nil {
 		tg.logger.WithError(err).Error("failed to GetUsers")
 		return err
@@ -95,7 +94,7 @@ func (tg *TgBot) Run(ctx uwe.Context) error {
 			session, ok := msg.Data.(models.Session)
 			if !ok {
 				tg.logger.WithField("msg_data_type", fmt.Sprintf("%T", msg.Data)).
-					Debug("incoming msg not a db.Session")
+					Debug("incoming msg is not a db.Session")
 				continue
 			}
 
@@ -103,79 +102,83 @@ func (tg *TgBot) Run(ctx uwe.Context) error {
 				continue
 			}
 
-			rawSession, err := yaml.Marshal(session)
-			if err != nil {
-				tg.logger.WithError(err).Error("unable to MarshalIndent session")
-				continue
-			}
-
-			for user, info := range tg.users {
-				if info.Muted {
-					continue
-				}
-
-				text := fmt.Sprintf(
-					"Hi, %s!\n\nWe got new accepted auth at [%s] host.\n\nHere details:\n\n```\n%s\n```\n\n",
-					user,
-					tg.server,
-					string(rawSession),
-				)
-
-				msg := tgbotapi.NewMessage(info.ChatID, text)
-				msg.ParseMode = "markdown"
-				msg.DisableWebPagePreview = true
-
-				if _, err := tg.bot.Send(msg); err != nil {
-					tg.logger.
-						WithError(err).
-						WithField("user", user).
-						Error("unable to send message to user")
-					continue
-				}
-
-			}
+			tg.handleNewSessionInfo(session)
 
 		case update := <-updates:
-			tg.logger.
-				Debug("new tg chat update")
+			tg.logger.Debug("new tg chat update")
 
 			if update.Message == nil || !update.Message.IsCommand() {
 				continue
 			}
 
-			if !tg.verifyAuth(update) {
+			if !tg.checkIsAuthorized(update) {
 				continue
 			}
 
 			tg.processUpdate(update)
 		case <-ctx.Done():
 			tg.bot.StopReceivingUpdates()
+			time.Sleep(time.Second)
 			return nil
 		}
 	}
 }
 
-func (tg *TgBot) verifyAuth(update tgbotapi.Update) bool {
+func (tg *TgBot) handleNewSessionInfo(session models.Session) {
+	rawSession, err := yaml.Marshal(session)
+	if err != nil {
+		tg.logger.WithError(err).Error("unable to MarshalIndent session")
+		return
+	}
+
+	for user, info := range tg.users {
+		if info.Muted {
+			continue
+		}
+
+		text := fmt.Sprintf(
+			"Hi, %s!\n\nNew accepted auth at *%s* host.\n\nHere is details:\n```\n%s\n```\n\n",
+			user,
+			tg.server,
+			string(rawSession),
+		)
+
+		msg := tgbotapi.NewMessage(info.ChatID, text)
+		msg.ParseMode = "markdown"
+		msg.DisableWebPagePreview = true
+
+		if _, err := tg.bot.Send(msg); err != nil {
+			tg.logger.
+				WithError(err).
+				WithField("user", user).
+				Error("unable to send message to user")
+			continue
+		}
+
+	}
+}
+
+func (tg *TgBot) checkIsAuthorized(update tgbotapi.Update) bool {
 	if _, ok := tg.users[update.Message.From.UserName]; ok {
 		return true
 	}
 
 	_, ok := tg.allowedUsers[update.Message.From.UserName]
 	if !ok {
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Тьфу на тебя! Не буду с тобой дружить!")
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+		msg.ParseMode = "markdown"
+		msg.Text = fmt.Sprintf("```%s```", goAway)
 		if _, err := tg.bot.Send(msg); err != nil {
-			tg.logger.
-				WithError(err).
+			tg.logger.WithError(err).
 				WithField("user", update.Message.From.UserName).
 				Error("unable to send message to user")
 		}
 		return false
 	}
 
-	err := tg.storage.TG().AddUser(update.Message.From.UserName, update.Message.Chat.ID)
+	err := tg.keeper.DB.TG().AddUser(update.Message.From.UserName, update.Message.Chat.ID, false)
 	if err != nil {
-		tg.logger.
-			WithError(err).
+		tg.logger.WithError(err).
 			WithField("user", update.Message.From.UserName).
 			Error("unable to save user into db")
 		return true
@@ -186,39 +189,103 @@ func (tg *TgBot) verifyAuth(update tgbotapi.Update) bool {
 }
 
 func (tg *TgBot) processUpdate(update tgbotapi.Update) {
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
-	msg.ParseMode = "markdown"
+	userName := update.Message.From.UserName
 
-	logger := tg.logger.
-		WithField("command", update.Message.Command()).
-		WithField("user", update.Message.From.UserName)
-
+	logger := tg.logger.WithField("user", userName).
+		WithField("command", update.Message.Command())
 	logger.Debug("process new update")
 
+	var msgText string
 	switch update.Message.Command() {
-	case "add_to_whitelist":
+	case "whitelist":
 		tgUser := update.Message.CommandArguments()
 		if tgUser != "" {
 			tg.allowedUsers[tgUser] = struct{}{}
-			msg.Text = fmt.Sprintf("User @%s added to whitelist.\n Wait for messages from them.", tgUser)
+			msgText = fmt.Sprintf("User @%s has been whitelisted.\nWaiting for messages from him...", tgUser)
 		} else {
-			msg.Text = "To add someone to whitelist pass his telegram *username*."
+			msgText = "To add someone to the white list, send their telegram *username*."
 		}
 
-	case "/status":
-
+	case "mute":
+		msgText = tg.handleMute(userName, true, logger)
+	case "unmute":
+		msgText = tg.handleMute(userName, false, logger)
+	case "stats":
+		msgText = tg.handleStats(logger)
+	case "status":
+		msgText = tg.handleStatus(update.Message.CommandArguments(), logger)
 	case "help":
-		msg.Text = botHelp
+		msgText = botHelp
 	default:
-		msg.Text = botHelp
+		msgText = botHelp
 	}
 
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+	msg.ParseMode = "markdown"
+	msg.Text = msgText
 	if _, err := tg.bot.Send(msg); err != nil {
-		logger.
-			WithError(err).
+		logger.WithError(err).
 			WithField("text", msg).
 			Error("unable to send message to user")
 	}
+
+}
+
+func (tg *TgBot) handleMute(userName string, mute bool, logger *logrus.Entry) string {
+	info := tg.users[userName]
+	info.Muted = mute
+	tg.users[userName] = info
+
+	err := tg.keeper.DB.TG().AddUser(userName, info.ChatID, mute)
+	if err != nil {
+		logger.WithError(err).Error("unable to mute user")
+		return "Action failed :("
+	}
+
+	return "Done"
+}
+
+func (tg *TgBot) handleStats(logger *logrus.Entry) string {
+	stats, err := tg.keeper.DB.Auth().GetStats()
+	if err != nil {
+		logger.WithError(err).Error("unable to get stats")
+		return "Action failed :("
+	}
+
+	rawStats, err := yaml.Marshal(stats)
+	if err != nil {
+		logger.WithError(err).Error("unable to marshal stats")
+		return "Action failed :("
+	}
+
+	return fmt.Sprintf(
+		"Actual auth statistic at *%s* host:\n```\n%s\n```\n\n",
+		tg.server,
+		string(rawStats))
+}
+
+func (tg *TgBot) handleStatus(user string, logger *logrus.Entry) string {
+	if user == "" {
+		return "Provide linux *username* to see his authorization details"
+	}
+
+	sessions, err := tg.keeper.DB.Auth().GetUserSessions(user)
+	if err != nil {
+		logger.WithError(err).Error("unable to get stats")
+		return "Action failed :("
+	}
+
+	rawStats, err := yaml.Marshal(sessions)
+	if err != nil {
+		logger.WithError(err).Error("unable to marshal sessions")
+		return "Action failed :("
+	}
+
+	return fmt.Sprintf(
+		"Sessions info at *%s* host for *%s*:\n```\n%s\n```\n\n",
+		tg.server,
+		user,
+		string(rawStats))
 
 }
 
@@ -226,11 +293,29 @@ const botHelp = `
 Available commands:
 	/help 	print help
 	
-	/add_to_whitelist <tgUsername>	add telegram account to bot white list
-	/mute	disable sending new auth updates
+	/whitelist <tgUsername>	— add telegram account to bot whitelist
+	/mute	— disable sending new auth updates
+	/unmute	— enable sending new auth updates
 	
-	/status	show list of active sessions at server
-	/status <user>	show session status for the <user> at server 
-	/all_sessions	show list of all sessions at server
-	/all_sessions <user>	show list of all sessions for the <user> at server
+	/stats	— show list of active sessions at server
+	/status <user>	— show session info for the <user> at server
+`
+
+// /all_sessions	— show list of all sessions at server
+// /all_sessions <user>	show list of all sessions for the <user> at server
+// `
+
+const goAway = `
+☣☣☣ GO AWAY ☣☣☣
+
+    \_\
+   (_**)
+  __) #_
+ ( )...()
+ || | |I|
+ || | |()__/
+ /\(___)
+_-"""""""-_""-_
+-,,,,,,,,- ,,-
+|////////////////////
 `

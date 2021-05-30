@@ -8,18 +8,18 @@ import (
 )
 
 const (
-	bucketAuthData  = "auth_data"
-	bucketAuthStats = "stats"
+	bucketAuthSessions = "auth_sessions"
+	bucketAuthStats    = "auth_stats"
 )
 
-// Auth Storage Schema:
+// AuthStorage Schema:
 // Bucket<username> -*> Key<ip> -> Value<Session>
 type AuthStorage interface {
-	GetStats() (models.Stats, error)
-	UpdateStats(authInfo models.Stats) error
-	SetAuthEvent(session models.AuthInfo) error
+	GetStats() (models.AuthStats, error)
+	SetStats(stats models.AuthStats) error
 	SetSession(session models.Session) error
 	GetSessions() (map[string]map[string]models.Session, error)
+	GetUserSession(username, remote string) (models.Session, error)
 	GetUserSessions(username string) (map[string]models.Session, error)
 }
 
@@ -27,174 +27,141 @@ type authStorage struct {
 	db *bolt.DB
 }
 
-func (st *authStorage) GetStats() (models.Stats, error) {
-	panic("implement me")
-}
+func (st *authStorage) GetStats() (models.AuthStats, error) {
+	stats := models.NewAuthStats()
 
-func (st *authStorage) UpdateStats(authInfo models.Stats) error {
-	panic("implement me")
-}
-
-func (st *authStorage) SetAuthEvent(authInfo models.AuthInfo) (err error) {
-	tx, err := st.db.Begin(true)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
+	err := st.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketAuthStats))
+		if bucket == nil {
+			return nil
 		}
-	}()
 
-	userBucket, err := tx.CreateBucketIfNotExists([]byte(authInfo.Username))
-	if err != nil {
-		return
-	}
+		rawStats := bucket.Get([]byte(bucketAuthStats))
+		if rawStats == nil {
+			stats = models.NewAuthStats()
+			return nil
+		}
 
-	sessionID, err := userBucket.NextSequence()
-	if err != nil {
-		return
-	}
+		return json.Unmarshal(rawStats, &stats)
+	})
 
+	return stats, err
+}
+
+func (st *authStorage) SetStats(stats models.AuthStats) error {
+	return st.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(bucketAuthStats))
+		if err != nil {
+			return err
+		}
+
+		rawStats, err := json.Marshal(stats)
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put([]byte(bucketAuthStats), rawStats)
+	})
+
+}
+
+func (st *authStorage) SetSession(session models.Session) error {
+	return st.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(bucketAuthSessions))
+		if err != nil {
+			return err
+		}
+
+		userBucket, err := bucket.CreateBucketIfNotExists([]byte(session.Username))
+		if err != nil {
+			return err
+		}
+
+		rawSession, err := json.Marshal(session)
+		if err != nil {
+			return err
+		}
+
+		return userBucket.Put([]byte(session.RemoteAddr), rawSession)
+	})
+}
+
+func (st *authStorage) GetUserSessions(username string) (map[string]models.Session, error) {
+	var sessions = map[string]models.Session{}
+
+	err := st.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketAuthSessions))
+		if bucket == nil {
+			return nil
+		}
+
+		userBucket := bucket.Bucket([]byte(username))
+		if userBucket == nil {
+			return nil
+		}
+
+		cursor := userBucket.Cursor()
+		for remote, value := cursor.First(); remote != nil; remote, value = cursor.Next() {
+			var session models.Session
+			err := json.Unmarshal(value, &session)
+			if err != nil {
+				return err
+			}
+
+			sessions[string(remote)] = session
+		}
+
+		return nil
+	})
+
+	return sessions, err
+}
+
+func (st *authStorage) GetUserSession(username, remote string) (models.Session, error) {
 	var session models.Session
+	session.Username = username
+	session.RemoteAddr = remote
 
-	rawSession := userBucket.Get([]byte(authInfo.RemoteAddr))
-	if rawSession == nil {
-		session = models.NewSession(sessionID, authInfo)
-	} else {
-		err = json.Unmarshal(rawSession, &session)
-		if err != nil {
-			return
+	err := st.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketAuthSessions))
+		if bucket == nil {
+			return nil
 		}
 
-		session.Update(authInfo)
-	}
+		userBucket := bucket.Bucket([]byte(username))
+		if userBucket == nil {
+			return nil
+		}
 
-	rawSession, err = json.Marshal(session)
-	if err != nil {
-		return
-	}
+		value := userBucket.Get([]byte(remote))
+		if value == nil {
+			return nil
+		}
 
-	if err = userBucket.Put([]byte(authInfo.RemoteAddr), rawSession); err != nil {
-		return
-	}
+		return json.Unmarshal(value, &session)
+	})
 
-	return
+	return session, err
 }
 
-func (st *authStorage) SetSession(session models.Session) (err error) {
-	tx, err := st.db.Begin(true)
+func (st *authStorage) GetSessions() (map[string]map[string]models.Session, error) {
+	sessions := map[string]map[string]models.Session{}
+
+	stats, err := st.GetStats()
 	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
-		}
-	}()
-
-	// userBucket, err := tx.CreateBucketIfNotExists([]byte(authInfo.Username))
-	// if err != nil {
-	// 	return
-	// }
-	//
-	// sessionID, err := userBucket.NextSequence()
-	// if err != nil {
-	// 	return
-	// }
-	//
-	// rawSession := userBucket.Get([]byte(authInfo.RemoteAddr))
-	// if rawSession == nil {
-	// 	session = models.NewSession(sessionID, authInfo)
-	// } else {
-	// 	err = json.Unmarshal(rawSession, &session)
-	// 	if err != nil {
-	// 		return
-	// 	}
-	//
-	// 	session.Update(authInfo)
-	// }
-	//
-	// rawSession, err = json.Marshal(session)
-	// if err != nil {
-	// 	return
-	// }
-	//
-	// if err = userBucket.Put([]byte(authInfo.RemoteAddr), rawSession); err != nil {
-	// 	return
-	// }
-
-	return
-}
-
-func (st *authStorage) GetSessions() (sessions map[string]map[string]models.Session, err error) {
-	tx, err := st.db.Begin(true)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
-		}
-	}()
-
-	authDataBucket := tx.Bucket([]byte(bucketAuthData))
-	if authDataBucket == nil {
-		return
+		return nil, err
 	}
 
-	// authDataBucket.Bucket()
-	//
-	// sessions = map[string]models.Session{}
-	// cursor := authDataBucket.Cursor()
-	// for remote, value := cursor.First(); remote != nil; remote, value = cursor.Next() {
-	// 	var session models.Session
-	// 	err = json.Unmarshal(value, &session)
-	// 	if err != nil {
-	// 		return
-	// 	}
-	//
-	// 	sessions[string(remote)] = session
-	// }
-
-	return
-}
-
-func (st *authStorage) GetUserSessions(username string) (sessions map[string]models.Session, err error) {
-	tx, err := st.db.Begin(true)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
-		}
-	}()
-
-	bucket := tx.Bucket([]byte(username))
-	if bucket == nil {
-		return
-	}
-
-	sessions = map[string]models.Session{}
-	cursor := bucket.Cursor()
-	for remote, value := cursor.First(); remote != nil; remote, value = cursor.Next() {
-		var session models.Session
-		err = json.Unmarshal(value, &session)
-		if err != nil {
-			return
+	for user, count := range stats.ActiveSessions.ByUsers {
+		if count < 1 {
+			continue
 		}
 
-		sessions[string(remote)] = session
+		sessions[user], err = st.GetUserSessions(user)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	return
+	return sessions, err
 }

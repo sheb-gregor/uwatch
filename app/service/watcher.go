@@ -1,6 +1,8 @@
 package service
 
 import (
+	"time"
+
 	"github.com/hpcloud/tail"
 	"github.com/lancer-kit/uwe/v2"
 	"github.com/sheb-gregor/uwatch/config"
@@ -11,65 +13,78 @@ import (
 )
 
 type Watcher struct {
-	config  config.Config
-	hubBus  EventBus
-	storage db.StorageI
-	logger  *logrus.Entry
+	config config.Config
+	hubBus EventBus
+	keeper db.Storekeeper
+	logger *logrus.Entry
+
+	startTime time.Time
+	logSynced bool
 }
 
-func NewWatcher(cfg config.Config, storage db.StorageI, hubBus EventBus, logger *logrus.Entry) *Watcher {
+func NewWatcher(cfg config.Config, keeper db.Storekeeper, hubBus EventBus, logger *logrus.Entry) *Watcher {
 	return &Watcher{
-		config:  cfg,
-		storage: storage,
-		hubBus:  hubBus,
+		config:    cfg,
+		keeper:    keeper,
+		hubBus:    hubBus,
+		startTime: time.Now(),
 		logger: logger.
 			WithField("appLayer", "workers").
 			WithField("worker", config.WWatcher)}
 }
 
-func (w *Watcher) Init() error {
+func (watcher *Watcher) Init() error {
 	return nil
 }
 
-func (w *Watcher) Run(ctx uwe.Context) error {
-	t, err := tail.TailFile(w.config.AuthLog, tail.Config{
+func (watcher *Watcher) Run(ctx uwe.Context) error {
+	t, err := tail.TailFile(watcher.config.AuthLog, tail.Config{
 		Location:  &tail.SeekInfo{Offset: 0, Whence: 0},
 		MustExist: true, Follow: true, ReOpen: true})
 	if err != nil {
-		w.logger.WithError(err).Error("failed to tail auth log")
+		watcher.logger.WithError(err).Error("failed to tail auth log")
 		return err
 	}
 
-	w.logger.Info("start event loop")
+	watcher.logger.Info("start event loop")
 	for {
 		select {
-		case <-w.hubBus.MessageBus():
+		case <-watcher.hubBus.MessageBus():
 		case line := <-t.Lines:
 			if line == nil {
 				continue
 			}
-			w.logger.Debug("new auth log line")
+			watcher.logger.Debug("new auth log line")
 
 			authInfo, err := logparser.ParseLine(line.Text)
 			if err != nil {
-				w.logger.WithError(err).Debug("invalid auth log line")
+				watcher.logger.WithError(err).Debug("invalid auth log line")
 				continue
 			}
 
-			if authInfo.Status == models.AuthFailed && w.config.IgnoreFails {
+			if authInfo.Date.Before(watcher.keeper.Stats.LastLogIn) {
 				continue
 			}
 
-			session, err := w.storage.Auth().SetAuthEvent(*authInfo)
+			session, err := watcher.keeper.StoreAuthEvent(*authInfo)
 			if err != nil {
-				w.logger.WithError(err).Error("SetAuthEvent failed")
+				watcher.logger.WithError(err).Error("SetAuthEvent failed")
 				continue
 			}
 
-			_ = w.hubBus.SendMessage(config.WTGBot, session)
-			w.logger.Debug("broadcast session to bots")
+			if authInfo.Status != models.AuthAccepted {
+				continue
+			}
+
+			if !watcher.logSynced {
+				watcher.logSynced = authInfo.Date.After(watcher.startTime)
+				continue
+			}
+
+			_ = watcher.hubBus.SendMessage(config.WTGBot, session)
+			watcher.logger.Debug("broadcast session to bots")
 		case <-ctx.Done():
-			w.logger.Info("finish event loop")
+			watcher.logger.Info("finish event loop")
 			return nil
 		}
 
