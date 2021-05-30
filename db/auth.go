@@ -2,168 +2,166 @@ package db
 
 import (
 	"encoding/json"
-	"time"
 
+	"github.com/sheb-gregor/uwatch/models"
 	bolt "go.etcd.io/bbolt"
 )
 
-type AuthStatus string
-
 const (
-	AuthAccepted     AuthStatus = "Accepted"
-	AuthDisconnected AuthStatus = "Disconnected"
-	AuthFailed       AuthStatus = "Failed"
+	bucketAuthSessions = "auth_sessions"
+	bucketAuthStats    = "auth_stats"
 )
 
-type AuthInfo struct {
-	Status     AuthStatus `json:"status"`
-	Username   string     `json:"username"`
-	AuthMethod string     `json:"auth_method,omitempty"`
-	RemoteAddr string     `json:"remote_addr"`
-	Date       time.Time  `json:"date"`
-}
-
-type Session struct {
-	ID          uint64           `json:"session_id"`
-	Status      AuthStatus       `json:"status"`
-	Username    string           `json:"username"`
-	AuthMethods map[string]int32 `json:"auth_methods,omitempty"`
-	RemoteAddr  string           `json:"remote_addr"`
-
-	ConnsCount     int32      `json:"conns_count"`
-	FirstLogInTime *time.Time `json:"login_time,omitempty"`
-	LastLogInTime  *time.Time `json:"login_time,omitempty"`
-	LastLogOutTime *time.Time `json:"logout_time,omitempty"`
-
-	FailsCount      int32      `json:"fails_count,omitempty"`
-	LastAttemptTime *time.Time `json:"last_attempt_time,omitempty"`
-}
-
-func NewSession(sessionID uint64, info AuthInfo) Session {
-	s := Session{
-		ID:          sessionID,
-		Status:      info.Status,
-		Username:    info.Username,
-		AuthMethods: map[string]int32{},
-		RemoteAddr:  info.RemoteAddr}
-
-	s.Update(info)
-
-	return s
-}
-
-func (s *Session) Update(info AuthInfo) {
-	switch info.Status {
-	case AuthAccepted:
-		s.ConnsCount = s.ConnsCount + 1
-		s.AuthMethods[info.AuthMethod] += 1
-
-		if s.FirstLogInTime == nil {
-			s.FirstLogInTime = &info.Date
-		}
-
-		s.LastLogInTime = &info.Date
-	case AuthDisconnected:
-		if s.ConnsCount > 0 {
-			s.ConnsCount -= 1
-		}
-		if s.AuthMethods[info.AuthMethod] > 0 {
-			s.AuthMethods[info.AuthMethod] -= 1
-		}
-
-		s.LastLogOutTime = &info.Date
-	case AuthFailed:
-		s.FailsCount += 1
-		s.LastAttemptTime = &info.Date
-	}
-
-	s.Status = info.Status
+// AuthStorage Schema:
+// Bucket<username> -*> Key<ip> -> Value<Session>
+type AuthStorage interface {
+	GetStats() (models.AuthStats, error)
+	SetStats(stats models.AuthStats) error
+	SetSession(session models.Session) error
+	GetSessions() (map[string]map[string]models.Session, error)
+	GetUserSession(username, remote string) (models.Session, error)
+	GetUserSessions(username string) (map[string]models.Session, error)
 }
 
 type authStorage struct {
 	db *bolt.DB
 }
 
-func (st *authStorage) UpsetAuthEvent(authInfo AuthInfo) (session Session, err error) {
-	tx, err := st.db.Begin(true)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
-		}
-	}()
+func (st *authStorage) GetStats() (models.AuthStats, error) {
+	stats := models.NewAuthStats()
 
-	userBucket, err := tx.CreateBucketIfNotExists([]byte(authInfo.Username))
-	if err != nil {
-		return
-	}
-
-	sessionID, err := userBucket.NextSequence()
-	if err != nil {
-		return
-	}
-
-	rawSession := userBucket.Get([]byte(authInfo.RemoteAddr))
-	if rawSession == nil {
-		session = NewSession(sessionID, authInfo)
-	} else {
-		err = json.Unmarshal(rawSession, &session)
-		if err != nil {
-			return
+	err := st.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketAuthStats))
+		if bucket == nil {
+			return nil
 		}
 
-		session.Update(authInfo)
-	}
+		rawStats := bucket.Get([]byte(bucketAuthStats))
+		if rawStats == nil {
+			stats = models.NewAuthStats()
+			return nil
+		}
 
-	rawSession, err = json.Marshal(session)
-	if err != nil {
-		return
-	}
+		return json.Unmarshal(rawStats, &stats)
+	})
 
-	if err = userBucket.Put([]byte(authInfo.RemoteAddr), rawSession); err != nil {
-		return
-	}
-
-	return
+	return stats, err
 }
 
-func (st *authStorage) GetUserSessions(username string) (sessions []Session, err error) {
-	tx, err := st.db.Begin(false)
+func (st *authStorage) SetStats(stats models.AuthStats) error {
+	return st.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(bucketAuthStats))
+		if err != nil {
+			return err
+		}
+
+		rawStats, err := json.Marshal(stats)
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put([]byte(bucketAuthStats), rawStats)
+	})
+
+}
+
+func (st *authStorage) SetSession(session models.Session) error {
+	return st.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(bucketAuthSessions))
+		if err != nil {
+			return err
+		}
+
+		userBucket, err := bucket.CreateBucketIfNotExists([]byte(session.Username))
+		if err != nil {
+			return err
+		}
+
+		rawSession, err := json.Marshal(session)
+		if err != nil {
+			return err
+		}
+
+		return userBucket.Put([]byte(session.RemoteAddr), rawSession)
+	})
+}
+
+func (st *authStorage) GetUserSessions(username string) (map[string]models.Session, error) {
+	var sessions = map[string]models.Session{}
+
+	err := st.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketAuthSessions))
+		if bucket == nil {
+			return nil
+		}
+
+		userBucket := bucket.Bucket([]byte(username))
+		if userBucket == nil {
+			return nil
+		}
+
+		cursor := userBucket.Cursor()
+		for remote, value := cursor.First(); remote != nil; remote, value = cursor.Next() {
+			var session models.Session
+			err := json.Unmarshal(value, &session)
+			if err != nil {
+				return err
+			}
+
+			sessions[string(remote)] = session
+		}
+
+		return nil
+	})
+
+	return sessions, err
+}
+
+func (st *authStorage) GetUserSession(username, remote string) (models.Session, error) {
+	var session models.Session
+	session.Username = username
+	session.RemoteAddr = remote
+
+	err := st.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketAuthSessions))
+		if bucket == nil {
+			return nil
+		}
+
+		userBucket := bucket.Bucket([]byte(username))
+		if userBucket == nil {
+			return nil
+		}
+
+		value := userBucket.Get([]byte(remote))
+		if value == nil {
+			return nil
+		}
+
+		return json.Unmarshal(value, &session)
+	})
+
+	return session, err
+}
+
+func (st *authStorage) GetSessions() (map[string]map[string]models.Session, error) {
+	sessions := map[string]map[string]models.Session{}
+
+	stats, err := st.GetStats()
 	if err != nil {
-		return
+		return nil, err
 	}
-	defer func() {
+
+	for user, count := range stats.ActiveSessions.ByUsers {
+		if count < 1 {
+			continue
+		}
+
+		sessions[user], err = st.GetUserSessions(user)
 		if err != nil {
-			err = tx.Rollback()
-		} else {
-			err = tx.Commit()
+			return nil, err
 		}
-	}()
-
-	userBucket := tx.Bucket([]byte(username))
-	if userBucket != nil {
-		return
 	}
 
-	cursor := userBucket.Cursor()
-
-	for {
-		_, rawSession := cursor.Next()
-		if rawSession == nil {
-			break
-		}
-
-		var session Session
-		err = json.Unmarshal(rawSession, &session)
-		if err != nil {
-			return
-		}
-		sessions = append(sessions, session)
-	}
-
-	return
+	return sessions, err
 }

@@ -1,3 +1,4 @@
+.idea
 # Binaries for programs and plugins
 *.exe
 *.exe~
@@ -16,5 +17,7 @@
 
 uwatch
 uwatch_db
-config.json
 *.db
+
+config.yaml
+!scritps/config.yaml

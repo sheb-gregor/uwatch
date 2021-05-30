@@ -1,4 +1,4 @@
-package workers
+package config
 
 import "github.com/lancer-kit/uwe/v2"
 
