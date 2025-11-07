@@ -1,0 +1,10 @@
+# server: my_lovely_machine
+auth_log: "/var/log/auth.log"
+data_dir: "/etc/uwatch"
+log_level: "info"
+ignore_fails: false
+
+tg:
+  api_token: "env:UWATCH_TG_API_TOKEN"
+  allowed_users:
+    shebg: {}

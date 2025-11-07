@@ -5,33 +5,33 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sheb-gregor/uwatch/db"
+	"github.com/sheb-gregor/uwatch/models"
 )
 
 func TestParseLine(t *testing.T) {
 	tests := []struct {
 		logLine string
-		want    *db.AuthInfo
+		want    *models.AuthInfo
 		wantErr bool
 	}{
 		{
 			wantErr: false,
-			want:    &db.AuthInfo{Status: db.AuthAccepted, Username: "sheb", AuthMethod: "publickey", RemoteAddr: "188.163.50.118"},
+			want:    &models.AuthInfo{Status: models.AuthAccepted, Username: "sheb", AuthMethod: "publickey", RemoteAddr: "188.163.50.118"},
 			logLine: "Jan  6 14:07:25 teamo sshd[31215]: Accepted publickey for sheb from 188.163.50.118 port 11087 ssh2: RSA SHA256:dKBV5Ama80sfH1e3G03VQ92kfUtQvn67zh4ebLm7smw",
 		},
 		{
 			wantErr: false,
-			want:    &db.AuthInfo{Status: db.AuthDisconnected, Username: "sheb", AuthMethod: "", RemoteAddr: "188.163.50.118"},
+			want:    &models.AuthInfo{Status: models.AuthDisconnected, Username: "sheb", AuthMethod: "", RemoteAddr: "188.163.50.118"},
 			logLine: "Jan  6 14:07:25 teamo sshd[31215]: Disconnected from user sheb 188.163.50.118 port 11323",
 		},
 		{
 			wantErr: false,
-			want:    &db.AuthInfo{Status: db.AuthFailed, Username: "yro", AuthMethod: "password", RemoteAddr: "213.91.179.246"},
+			want:    &models.AuthInfo{Status: models.AuthFailed, Username: "yro", AuthMethod: "password", RemoteAddr: "213.91.179.246"},
 			logLine: "Jan  6 14:07:25 teamo sshd[31215]: Failed password for invalid user yro from 213.91.179.246 port 37353 ssh2",
 		},
 		{
 			wantErr: false,
-			want:    &db.AuthInfo{Status: db.AuthFailed, Username: "root", AuthMethod: "password", RemoteAddr: "218.92.0.164"},
+			want:    &models.AuthInfo{Status: models.AuthFailed, Username: "root", AuthMethod: "password", RemoteAddr: "218.92.0.164"},
 			logLine: "Jan  6 14:07:25 teamo sshd[31215]: Failed password for root from 218.92.0.164 port 26493 ssh2",
 		},
 		{

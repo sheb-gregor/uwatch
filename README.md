@@ -1,4 +1,9 @@
-# uwatch
+# UWatch
 
-Service for watching and notification of logins on the server
+UWatch monitors the authorization log, calculates statistics and notifies you of new logins.
 
+## Configuration
+
+## Telegram Bot
+
+## Slack
